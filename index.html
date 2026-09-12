@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Terrace House Viewer</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #c8d2dd;
+               font-family: system-ui, -apple-system, sans-serif; }
+  canvas { display: block; }
+
+  /* Every box below that gets hidden and unhidden from JS, in one rule.
+     [hidden] is only a UA `display: none`, so any display rule of the
+     element's own quietly outranks it: the element keeps its attribute,
+     reads as hidden to anything that asks, and stays on screen. That is
+     not a thing you notice except by looking. */
+  #panel[hidden], #storey-rows[hidden],
+  #furniture-panel[hidden], #furniture-body[hidden] { display: none; }
+  /* The two control surfaces: the mode panel at top left, and the
+     furniture drawer that slides out of the right edge in plan view.
+     They look the same, so they are styled together. */
+  #panel, #furniture-body {
+    display: flex; flex-direction: column; gap: 6px;
+    background: rgba(255,255,255,0.9); padding: 12px 14px;
+    font-size: 14px; color: #222;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+  }
+  #panel {
+    position: absolute; top: env(safe-area-inset-top, 12px); left: 12px;
+    border-radius: 8px;
+  }
+  #panel label, #furniture-body label {
+    display: flex; align-items: center; gap: 8px; text-transform: capitalize;
+    cursor: pointer; user-select: none;
+  }
+  #panel input, #furniture-body input { width: 17px; height: 17px; }
+  #panel button, #furniture-body button {
+    margin-top: 4px; padding: 7px 10px; font: inherit; cursor: pointer;
+    border: 1px solid #b9c2cc; border-radius: 5px; background: #fff;
+  }
+  #panel button:active, #furniture-body button:active { background: #eef1f4; }
+  #storey-rows { display: flex; flex-direction: column; gap: 6px; }
+  #status {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: rgba(255,255,255,0.92); padding: 10px 16px; border-radius: 6px;
+    font-size: 14px; color: #333;
+  }
+  #status.error { color: #a4271c; max-width: 70vw; }
+
+  #panel { max-height: calc(100vh - 24px); overflow-y: auto; }
+  #panel hr, #furniture-body hr {
+    width: 100%; border: none; border-top: 1px solid #d6dbe0; margin: 2px 0;
+  }
+  #panel .section-label, #furniture-body .section-label {
+    font-size: 12px; text-transform: uppercase; color: #667; margin-top: 2px;
+  }
+  #panel select, #furniture-body select {
+    font: inherit; padding: 6px; border-radius: 5px; border: 1px solid #b9c2cc;
+    max-width: 100%;
+  }
+  #panel .row, #furniture-body .row { display: flex; gap: 6px; align-items: center; }
+  #panel .row button, #furniture-body .row button { flex: 1; margin-top: 0; }
+  #panel .row button:disabled, #furniture-body .row button:disabled {
+    opacity: 0.4; cursor: default;
+  }
+  #panel .level-name { flex: 2; text-align: center; text-transform: capitalize;
+                       font-size: 13px; color: #334; }
+  #panel button.active, #furniture-body button.active {
+    background: #2b6cb0; color: #fff; border-color: #2b6cb0;
+  }
+
+  /* Furniture lives off the right edge rather than in the panel: it only
+     applies to the plan view, and placing a piece wants the plan itself
+     uncovered. The tab is the whole control when the drawer is shut. */
+  #furniture-panel {
+    position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+    display: flex; align-items: flex-start;
+    max-height: calc(100vh - 24px);
+  }
+  #furniture-tab {
+    writing-mode: vertical-rl; text-orientation: mixed;
+    padding: 16px 8px; margin: 0; font: inherit; font-size: 13px; cursor: pointer;
+    border: 1px solid #b9c2cc; border-right: none; border-radius: 8px 0 0 8px;
+    background: rgba(255,255,255,0.9); color: #222;
+    box-shadow: -2px 2px 10px rgba(0,0,0,0.15);
+  }
+  #furniture-panel.open #furniture-tab {
+    background: #2b6cb0; color: #fff; border-color: #2b6cb0;
+  }
+  #furniture-body {
+    width: 220px; max-height: calc(100vh - 24px); overflow-y: auto;
+    border-radius: 8px 0 0 8px;
+  }
+  #furniture-panel.open #furniture-body { border-radius: 0; }
+
+  #walk-hud {
+    position: absolute; inset: 0; pointer-events: none;
+  }
+  #walk-hud #headroom {
+    position: absolute; top: env(safe-area-inset-top, 12px); left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.55); color: #fff; font-size: 13px; padding: 5px 12px; border-radius: 6px;
+  }
+  #walk-hud #headroom.warn { background: rgba(180,40,20,0.85); }
+  #walk-hud #crosshair {
+    position: absolute; top: 50%; left: 50%; width: 8px; height: 8px; margin: -4px;
+    border: 1.5px solid rgba(255,255,255,0.85); border-radius: 50%;
+  }
+  #walk-hud #exit-walk {
+    position: absolute; top: env(safe-area-inset-top, 12px); right: 12px; pointer-events: auto;
+    padding: 7px 12px; font: inherit; border-radius: 6px; border: none;
+    background: rgba(0,0,0,0.55); color: #fff;
+  }
+  #walk-hud .hint {
+    position: absolute; bottom: env(safe-area-inset-bottom, 14px); left: 50%; transform: translateX(-50%);
+    color: rgba(255,255,255,0.8); font-size: 12px; background: rgba(0,0,0,0.35);
+    padding: 4px 10px; border-radius: 5px;
+  }
+  #joystick {
+    position: absolute; width: 90px; height: 90px; margin: -45px;
+    border-radius: 50%; background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.4);
+  }
+  #joystick .knob {
+    position: absolute; top: 50%; left: 50%; width: 42px; height: 42px;
+    border-radius: 50%; background: rgba(255,255,255,0.55);
+    transform: translate(-50%, -50%);
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="panel"></div>
+<aside id="furniture-panel" hidden>
+  <button id="furniture-tab" aria-expanded="false" aria-controls="furniture-body">Furniture</button>
+  <div id="furniture-body" hidden></div>
+</aside>
+<div id="walk-hud" hidden>
+  <div id="headroom">headroom —</div>
+  <div id="crosshair"></div>
+  <div id="joystick" hidden><div class="knob"></div></div>
+  <div class="hint">drag left to move · drag right to look · or WASD and drag</div>
+  <button id="exit-walk">Exit walk mode</button>
+</div>
+<input type="file" id="import-file" accept="application/json" hidden>
+<div id="status">Loading the house…</div>
+<script type="module" src="./src/app.js"></script>
+</body>
+</html>
